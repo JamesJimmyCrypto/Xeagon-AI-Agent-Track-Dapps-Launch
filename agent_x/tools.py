@@ -1,19 +1,47 @@
-from langchain_community.document_loaders import RSSFeedLoader
+import os
 import requests
-from langchain.agents import AgentExecutor, create_tool_calling_agent
+import getpass
+
+# Set up environment variables for the CDP toolkit
+# Replace these with your actual credentials
+if not os.getenv("CDP_API_KEY_NAME"):
+    os.environ["CDP_API_KEY_NAME"] = getpass.getpass("CDP_API_KEY_NAME")
+if not os.getenv("CDP_API_KEY_PRIVATE_KEY"):
+    os.environ["CDP_API_KEY_PRIVATE_KEY"] = getpass.getpass("CDP_API_KEY_PRIVATE_KEY: ")
+
+# Optional: Set network (defaults to base-sepolia)
+os.environ["NETWORK_ID"] = "base-sepolia"  # or "base-mainnet"
+
+# Set up OpenAI API key for LLM (Replace with your actual key)
+os.environ["OPENAI_API_KEY"] = ""
+
+########################################
+# CDP Toolkit initialization
+########################################
+from cdp_langchain.agent_toolkits import CdpToolkit
+from cdp_langchain.utils import CdpAgentkitWrapper
+
+# Initialize CDP wrapper
+cdp = CdpAgentkitWrapper()
+
+# Create toolkit from wrapper
+cdp_toolkit = CdpToolkit.from_cdp_agentkit_wrapper(cdp)
+cdp_tools = cdp_toolkit.get_tools()
+
+########################################
+# Additional Tools and LLM Setup
+########################################
+from langchain_community.document_loaders import RSSFeedLoader
 from langchain_openai import ChatOpenAI
+from langchain.agents import AgentExecutor, create_react_agent
 from langchain_core.tools import tool
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
-import os
 
 llm = ChatOpenAI(temperature=1, model="gpt-4o-mini")
-os.environ["OPENAI_API_KEY"] = ""
 
 
 def generate_gemini(system, messages):
-
     import google.generativeai as genai
-
     from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
     safe = {
@@ -22,9 +50,7 @@ def generate_gemini(system, messages):
         HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
         HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
     }
-    GOOGLE_API_KEY = ""
-    import os
-
+    GOOGLE_API_KEY = ""  # Replace with your actual Google PaLM key
     os.environ["GOOGLE_API_KEY"] = GOOGLE_API_KEY
     genai.configure(api_key=GOOGLE_API_KEY)
     model = genai.GenerativeModel(
@@ -55,7 +81,7 @@ def reddit_search(session_id: str, query: str):
         }
 
         headers = {
-            "x-rapidapi-key": "",
+            "x-rapidapi-key": "",  # Replace with your RapidAPI key for Reddit
             "x-rapidapi-host": "reddit3.p.rapidapi.com",
         }
 
@@ -69,12 +95,7 @@ def reddit_search(session_id: str, query: str):
                 selftext = post.get("selftext", "No text provided")
                 url = post.get("url", "No URL provided")
                 selftext_html = post.get("selftext_html", "No HTML provided")
-                author_url = (
-                    f"https://www.reddit.com/user/{post.get('author', 'unknown')}"
-                )
-                provide_url = f"https://www.reddit.com{post.get('permalink', '')}"
 
-                # Create a dictionary with the extracted data and append to the list
                 extracted_post = {
                     "title": title,
                     "selftext": selftext,
@@ -85,13 +106,13 @@ def reddit_search(session_id: str, query: str):
             res = generate_gemini(
                 f"You are insights extractor and you are tasked to understand raw data and output the given query: {query}",
                 [
-                    f"Here is the Raw data from sources that fetched for the query {query}  , use below information to answer\n\n<data>{str(extracted_data)}<data> output all the good insights that is usefull to answer the query"
+                    f"Here is the Raw data from sources that fetched for the query {query}, use below information to answer\n\n<data>{str(extracted_data)}<data> output all the good insights that are useful to answer the query"
                 ],
             )
 
             return res
 
-        return f"No data found"
+        return "No data found"
 
     except Exception as e:
         return f"Error while searching on reddit: {e}"
@@ -100,19 +121,18 @@ def reddit_search(session_id: str, query: str):
 @tool
 def twitter(session_id: str, topic: str):
     """
-    This function is used to search a topic  on twitter
+    This function is used to search a topic on Twitter.
     """
     try:
         url = "https://twitter-api47.p.rapidapi.com/v2/search"
 
         querystring = {"query": topic, "type": "Latest"}
         headers = {
-            "x-rapidapi-key": "",
+            "x-rapidapi-key": "",  # Replace with your RapidAPI key for Twitter
             "x-rapidapi-host": "twitter-api47.p.rapidapi.com",
         }
 
         response = requests.get(url, headers=headers, params=querystring)
-        print(response.text)
         if response.status_code == 200:
             response = response.json()
             extracted_data = []
@@ -125,10 +145,8 @@ def twitter(session_id: str, topic: str):
                 conv_id = legacy.get("conversation_id_str", "")
                 twitter_post_url = f"https://x.com/{user_id}/status/{conv_id}"
 
-                # Get the first expanded URL if available
                 link = urls[0].get("expanded_url") if urls else ""
 
-                # Append the full text and link to the tweet_data list
                 extracted_data.append(
                     {
                         "text": full_text,
@@ -139,16 +157,16 @@ def twitter(session_id: str, topic: str):
             res = generate_gemini(
                 f"You are insights extractor and you are tasked to understand raw data and output the given query: {topic}",
                 [
-                    f"Here is the Raw data from sources that fetched for the query {topic}  , use below information to answer\n\n<data>{str(extracted_data)}<data> output all the good insights that is usefull to answer the query"
+                    f"Here is the Raw data from sources that fetched for the query {topic}, use below information to answer\n\n<data>{str(extracted_data)}<data> output all the good insights that are useful to answer the query"
                 ],
             )
 
             return res
 
-        return f"No data found"
+        return "No data found"
 
     except Exception as e:
-        return f"Error while searching on reddit: {e}"
+        return f"Error while searching on twitter: {e}"
 
 
 @tool
@@ -160,8 +178,23 @@ def rss_listener(session_id: str):
     data = loader.load()
     out = generate_gemini(
         [
-            "Anaylze data and help me understand is there any potential BUY/SELL events for any of the altcoins"
+            "Analyze data and help me understand if there are any potential BUY/SELL events for any of the altcoins"
         ],
         data[0].page_content,
     )
     return out
+
+all_tools = cdp_tools + [reddit_search, twitter, rss_listener]
+
+# Initialize the agent with all tools
+agent_executor = create_react_agent(llm, all_tools)
+
+example_query = "Send 0.005 ETH to john2879.base.eth"
+events = agent_executor.stream(
+    {"messages": [("user", example_query)]},
+    stream_mode="values",
+)
+
+for event in events:
+    # Print agent response as it streams
+    event["messages"][-1].pretty_print()
